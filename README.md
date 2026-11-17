@@ -8,6 +8,10 @@ dan filter model otomatis.
 
 - Streaming token (SSE) di atas `POST /v1/chat/completions`.
 - Kirim gambar via tombol, tempel (`Ctrl+V`), atau tarik file ke jendela.
+- **Input suara**: klik ikon mikrofon, bicara, klik lagi. Rekaman diubah ke
+  WAV 16 kHz mono di peramban lalu ditranskripsi lewat `/v1/audio/transcriptions`
+  (model `gemini/gemini-3.5-flash-lite`). Hasil masuk ke kotak pesan, tidak
+  langsung terkirim. Auto-stop 60 detik. Butuh HTTPS atau `localhost`.
 - Riwayat percakapan di `localStorage`, sidebar dengan hapus/rename judul.
 - Slash command di kotak chat:
   - `/model` — pilih model (daftar dari `/v1/models`)
@@ -102,6 +106,35 @@ Cek cepat sebelum commit:
 git grep -nE 'sk-[a-zA-Z0-9-]{8,}' || echo "bersih"
 ```
 
+## Input suara
+
+Klik ikon mikrofon di kiri kotak pesan → bicara → klik lagi. Teks hasil
+transkripsi disisipkan ke kotak pesan (tidak langsung terkirim).
+
+Alur: `getUserMedia` → Web Audio → downmix mono → resample 16 kHz → WAV PCM16
+(di peramban, tanpa dependensi) → `POST /v1/audio/transcriptions`
+(`model=gemini/gemini-3.5-flash-lite`). Auto-stop 60 detik.
+
+**Wajib secure context.** `getUserMedia` hanya ada di `https://` atau
+`localhost`. Jadi:
+
+- `http://127.0.0.1:8090` di mesin ini → jalan.
+- `http://<IP-LAN>:8090` dari HP → **tidak jalan** (`navigator.mediaDevices`
+  tidak ada), bukan bug aplikasi.
+
+Buka lewat HTTPS dengan tailscale:
+
+```bash
+sudo tailscale serve --bg http://127.0.0.1:8090
+tailscale serve status     # lihat URL https://<host>.<tailnet>.ts.net
+```
+
+Lalu buka URL `https://...ts.net` di HP. (Kalau tidak mau pakai root permanen:
+`sudo tailscale set --operator=$USER` sekali, setelah itu cukup `tailscale serve`.)
+
+STT hanya didukung provider Gemini. Provider lain (nvidia/groq/openrouter/cf)
+menolak dengan `Provider '...' does not support STT` — bukan salah konfigurasi.
+
 ## Model
 
 Daftar diambil dari `/v1/models`. Saat pertama dimuat, semua model diuji paralel
@@ -155,3 +188,6 @@ LD_LIBRARY_PATH=/path/ke/libs node uicheck.mjs
 | Model hilang dari daftar | Model sedang mati. Klik **uji ulang**, atau toggle **gagal**. |
 | Gambar ditolak | Pilih model bertanda `· gambar`. |
 | Error `500/403/503` saat chat | Model itu mati di sisi penyedia. Ganti ke model lain. |
+| Ikon mikrofon tidak bereaksi | Halaman dibuka lewat `http://<IP>` bukan HTTPS/localhost. `getUserMedia` butuh secure context — lihat bagian Input suara. |
+| `Izin mikrofon ditolak` | Aktifkan izin mikrofon untuk situs ini di setelan peramban. |
+| `Gagal transkripsi: Provider ... does not support STT` | `STT_MODEL` di `index.html` bukan model Gemini. Hanya provider Gemini yang mendukung STT. |

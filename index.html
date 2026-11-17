@@ -100,6 +100,9 @@ button{font:inherit;color:inherit}
 }
 .icon-btn:hover{background:color-mix(in srgb,var(--ink) 7%,transparent); color:var(--ink)}
 .icon-btn:active{transform:scale(.94)}
+.icon-btn.rec{color:var(--accent)}
+.icon-btn.rec svg{animation:recpulse 1.1s ease-in-out infinite}
+@keyframes recpulse{50%{opacity:.3}}
 .mobile-only{display:none}
 
 .thread{flex:1; overflow-y:auto; scroll-behavior:smooth}
@@ -355,13 +358,16 @@ button{font:inherit;color:inherit}
           <button type="button" class="icon-btn" id="attachBtn" aria-label="Lampirkan gambar">
             <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
           </button>
+          <button type="button" class="icon-btn" id="micBtn" aria-label="Rekam suara" aria-pressed="false">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18.5V21"/></svg>
+          </button>
           <textarea id="input" rows="1" placeholder="Balas…" aria-label="Pesan"></textarea>
           <button class="send-btn" id="sendBtn" type="submit" aria-label="Kirim pesan" disabled>
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
           </button>
         </div>
       </form>
-      <p class="hint"><kbd>Enter</kbd> kirim · <kbd>Shift</kbd>+<kbd>Enter</kbd> baris baru · tempel atau tarik gambar ke sini</p>
+      <p class="hint" id="hint" aria-live="polite"><kbd>Enter</kbd> kirim · <kbd>Shift</kbd>+<kbd>Enter</kbd> baris baru · tempel atau tarik gambar ke sini</p>
     </div>
   </main>
 </div>
@@ -1066,6 +1072,147 @@ button{font:inherit;color:inherit}
     i.addEventListener("change", () => [...i.files].forEach(addImage));
     i.click();
   });
+
+  /* ---------- rekam suara → teks ---------- */
+  const STT_MODEL = "gemini/gemini-3.5-flash-lite"; // satu-satunya provider yang lolos STT di 9router
+  const rec = { on: false, stream: null, ctx: null, src: null, node: null, gain: null, chunks: [], t0: 0, timer: 0 };
+  const hintEl = $("hint");
+  const hintDefault = hintEl.innerHTML;
+  let hintTimer = 0;
+  function hint(text, ms) {
+    clearTimeout(hintTimer);
+    if (!text) { hintEl.innerHTML = hintDefault; return; }
+    hintEl.textContent = text;
+    if (ms) hintTimer = setTimeout(() => { hintEl.innerHTML = hintDefault; }, ms);
+  }
+
+  function insertText(t) {
+    const s = input.selectionStart ?? input.value.length;
+    const e = input.selectionEnd ?? s;
+    const pad = s > 0 && !/\s$/.test(input.value.slice(0, s)) ? " " : "";
+    input.value = input.value.slice(0, s) + pad + t + input.value.slice(e);
+    const pos = s + pad.length + t.length;
+    input.setSelectionRange(pos, pos);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.focus();
+  }
+
+  function resample16k(buf, from, to) {
+    if (from === to) return buf;
+    const ratio = from / to, n = Math.floor(buf.length / ratio);
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = i * ratio, i0 = Math.floor(x), f = x - i0;
+      const a = buf[i0] || 0, b = buf[i0 + 1] ?? a;
+      out[i] = a + (b - a) * f;
+    }
+    return out;
+  }
+
+  function encodeWav(samples, rate) {
+    const b = new ArrayBuffer(44 + samples.length * 2);
+    const v = new DataView(b);
+    const w = (o, s) => { for (let i = 0; i < 4; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    w(0, "RIFF"); v.setUint32(4, 36 + samples.length * 2, true); w(8, "WAVE");
+    w(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true);
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    w(36, "data"); v.setUint32(40, samples.length * 2, true);
+    for (let i = 0; i < samples.length; i++) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+    return b;
+  }
+
+  async function transcribe(wav) {
+    const fd = new FormData();
+    fd.append("file", new Blob([wav], { type: "audio/wav" }), "rekaman.wav");
+    fd.append("model", STT_MODEL);
+    const res = await fetch(settings.baseURL.replace(/\/$/, "") + "/audio/transcriptions", {
+      method: "POST", headers: authHeaders(), body: fd,
+    });
+    let j = null;
+    try { j = await res.json(); } catch {}
+    if (!res.ok) throw new Error(j?.error?.message || res.status + " " + res.statusText);
+    return (j?.text || "").trim();
+  }
+
+  function micUI(on) {
+    const b = $("micBtn");
+    b.classList.toggle("rec", on);
+    b.setAttribute("aria-pressed", String(on));
+    b.setAttribute("aria-label", on ? "Berhenti merekam" : "Rekam suara");
+  }
+
+  async function startRec() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      hint("Mikrofon butuh HTTPS atau localhost. Buka lewat https://<host>.ts.net (tailscale serve).", 9000);
+      return;
+    }
+    try {
+      rec.stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+    } catch (e) {
+      const msg = {
+        NotAllowedError: "Izin mikrofon ditolak. Aktifkan di setelan situs peramban.",
+        NotFoundError: "Tidak ada mikrofon terdeteksi.",
+        NotReadableError: "Mikrofon sedang dipakai aplikasi lain.",
+        SecurityError: "Mikrofon butuh HTTPS atau localhost.",
+      }[e.name] || "Gagal membuka mikrofon: " + (e.message || e.name);
+      hint(msg, 9000);
+      return;
+    }
+    rec.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    rec.src = rec.ctx.createMediaStreamSource(rec.stream);
+    rec.node = rec.ctx.createScriptProcessor(4096, 1, 1);
+    rec.gain = rec.ctx.createGain();
+    rec.gain.gain.value = 0; // tetap di graf, tapi tidak memantulkan suara ke speaker
+    rec.chunks = [];
+    rec.node.onaudioprocess = (ev) => {
+      if (rec.on) rec.chunks.push(new Float32Array(ev.inputBuffer.getChannelData(0)));
+    };
+    rec.src.connect(rec.node); rec.node.connect(rec.gain); rec.gain.connect(rec.ctx.destination);
+    rec.on = true; rec.t0 = Date.now(); micUI(true);
+    const tick = () => {
+      if (!rec.on) return;
+      const s = Math.floor((Date.now() - rec.t0) / 1000);
+      hint(`Merekam ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} · klik mikrofon untuk berhenti`);
+      if (s >= 60) return stopRec();
+      rec.timer = setTimeout(tick, 250);
+    };
+    tick();
+  }
+
+  async function stopRec() {
+    if (!rec.on) return;
+    rec.on = false;
+    clearTimeout(rec.timer);
+    const rate = rec.ctx.sampleRate, chunks = rec.chunks;
+    rec.chunks = [];
+    try { rec.node.disconnect(); rec.src.disconnect(); rec.gain.disconnect(); } catch {}
+    rec.stream.getTracks().forEach((t) => t.stop());
+    rec.stream = rec.ctx = rec.src = rec.node = rec.gain = null;
+    micUI(false);
+
+    const total = chunks.reduce((n, c) => n + c.length, 0);
+    if (total < rate * 0.4) { hint("Rekaman terlalu pendek, coba lagi.", 5000); return; }
+    hint("Mentranskripsi...");
+    try {
+      const pcm = new Float32Array(total);
+      let o = 0;
+      for (const c of chunks) { pcm.set(c, o); o += c.length; }
+      const text = await transcribe(encodeWav(resample16k(pcm, rate, 16000), 16000));
+      hint(null);
+      if (text) insertText(text);
+      else hint("Tidak ada suara terdeteksi.", 6000);
+    } catch (e) {
+      hint("Gagal transkripsi: " + (e.message || e), 9000);
+    }
+  }
+
+  $("micBtn").addEventListener("click", () => { rec.on ? stopRec() : startRec(); });
 
   const input = $("input");
   input.addEventListener("input", () => {
