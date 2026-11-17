@@ -274,6 +274,13 @@ button{font:inherit;color:inherit}
   color:var(--ink); font:inherit; font-size:14px; outline:none;
 }
 .field input:focus{border-color:var(--accent)}
+.field textarea{
+  padding:10px 12px; border:1px solid var(--border-strong); border-radius:9px; background:var(--bg);
+  color:var(--ink); font:inherit; font-size:13px; outline:none; resize:vertical; min-height:70px; line-height:1.5;
+}
+.field textarea:focus{border-color:var(--accent)}
+.field.check{flex-direction:row; align-items:center; gap:8px; margin-bottom:8px}
+.field.check input{width:16px; height:16px; padding:0; accent-color:var(--accent); flex:none}
 .field .note{font-size:12px; color:var(--muted)}
 .sheet-actions{display:flex; justify-content:flex-end; gap:8px; margin-top:20px}
 .btn{padding:9px 16px; border-radius:9px; border:1px solid var(--border-strong); background:transparent; cursor:pointer; font-weight:500; font-size:14px}
@@ -389,6 +396,16 @@ button{font:inherit;color:inherit}
       <span class="note" id="keyNote">Kosongkan kalau server proxy sudah menyuntik kunci.</span>
     </div>
     <p class="note" id="connStatus" style="margin:0 0 4px;min-height:18px"></p>
+    <div class="field">
+      <label for="setPrompt">System prompt</label>
+      <textarea id="setPrompt" rows="3" spellcheck="false" placeholder="Kosongkan untuk memakai bawaan"></textarea>
+      <span class="note">Identitas &amp; aturan untuk model. Kosong = bawaan AiXych (menyebut model aktif, bukan Anthropic/Claude).</span>
+    </div>
+    <div class="field check">
+      <input type="checkbox" id="setAutoProbe">
+      <label for="setAutoProbe" style="font-weight:400">Pindai model otomatis saat daftar dimuat</label>
+    </div>
+    <p class="note" id="probeNote" style="margin:-6px 0 12px">Mati = tidak menunggu tes; model gagal disembunyikan, klik “uji ulang” kapan pun.</p>
     <div class="sheet-actions">
       <button class="btn" type="button" id="setTest" style="margin-right:auto">Tes koneksi</button>
       <button class="btn" type="button" id="setCancel">Tutup</button>
@@ -410,10 +427,20 @@ button{font:inherit;color:inherit}
   const DEFAULT_SET = {
     baseURL: PROXY ? location.origin + "/v1" : "http://127.0.0.1:20128/v1",
     apiKey: "",
+    system: "",        // kosong = pakai DEFAULT_SYSTEM
+    autoProbe: false,  // pindai model sendiri, atau tunggu perintah "uji ulang"
   };
+  const DEFAULT_SYSTEM = (m) =>
+    `Kamu AiXych, antarmuka chat ini. Model yang sedang dipakai: ${m || "belum dipilih"}. ` +
+    "Jangan mengaku sebagai produk Anthropic, Claude, OpenAI, atau Google; bila ditanya siapa kamu " +
+    "atau model apa yang menjawab, sebutkan AiXych dan model di atas.";
   const canCall = () => PROXY || !!settings.apiKey;
   const authHeaders = () => settings.apiKey ? { Authorization: "Bearer " + settings.apiKey } : {};
-  const pingFresh = (id) => { const p = pingMap[id]; return !!p && Date.now() - p.ts < PING_TTL; };
+  const pingFresh = (id) => {
+    const p = pingMap[id];
+    if (!p) return false;
+    return Date.now() - p.ts < (p.ok ? PING_TTL : FAIL_TTL); // model mati tak diuji ulang tiap 6 jam
+  };
   const statusOf = (id) => { const p = pingMap[id]; return !p ? "unknown" : (p.ok ? "ok" : "fail"); };
   const PREF_MODELS = ["gemini/gemini-3.5-flash-lite", "cbai/glm-5.1", "cbai/glm-5v-turbo",
     "openrouter/nvidia/nemotron-3.5-lightning:free", "combo_motion", "Pion_1"];
@@ -432,6 +459,7 @@ button{font:inherit;color:inherit}
   let showFail = store.get("pc.showFail", false);
   let probing = false;
   const PING_TTL = 6 * 60 * 60 * 1000;
+  const FAIL_TTL = 24 * 60 * 60 * 1000;
   const FILTERS = [
     { id: "all", label: "Semua", test: () => true },
     { id: "img", label: "Gambar", test: (m) => m.vision },
@@ -651,7 +679,10 @@ button{font:inherit;color:inherit}
     const payload = {
       model: model || undefined,
       stream: true,
-      messages: c.messages.filter((x) => !x.pending || x.role === "user").map(toApi),
+      messages: [
+        { role: "system", content: (settings.system || "").trim() || DEFAULT_SYSTEM(model) },
+        ...c.messages.filter((x) => !x.pending || x.role === "user").map(toApi),
+      ],
     };
     let raf = 0;
     const flush = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; updateStreamingMsg(); scrollDown(); }); };
@@ -881,7 +912,7 @@ button{font:inherit;color:inherit}
     }
     store.set(LS.model, model);
     $("modelName").textContent = model;
-    probeAll(false);
+    if (settings.autoProbe) probeAll(false);
   }
 
   /* ---------- uji model (ping mini) ---------- */
@@ -949,7 +980,8 @@ button{font:inherit;color:inherit}
       head.className = "menu-head";
       const label = document.createElement("span");
       label.className = "grow"; label.id = "probeStatus";
-      label.textContent = probing ? "memeriksa…" : "";
+      label.textContent = probing ? "memeriksa…"
+        : (!settings.autoProbe && models.some((m) => !pingMap[m.id]) ? "pindai mati · klik uji ulang" : "");
       const again = document.createElement("button");
       again.type = "button"; again.className = "mini"; again.textContent = "uji ulang";
       again.addEventListener("click", (e) => { e.stopPropagation(); probeAll(true); });
@@ -1015,6 +1047,8 @@ button{font:inherit;color:inherit}
   function openSettings() {
     $("setBase").value = settings.baseURL;
     $("setKey").value = settings.apiKey;
+    $("setPrompt").value = settings.system || "";
+    $("setAutoProbe").checked = !!settings.autoProbe;
     $("connStatus").textContent = "";
     $("keyNote").textContent = PROXY
       ? "Kosongkan — server proxy menyuntik kunci. Isi hanya kalau akses langsung ke 9router."
@@ -1039,6 +1073,8 @@ button{font:inherit;color:inherit}
   function saveSettings() {
     settings.apiKey = $("setKey").value.trim();
     settings.baseURL = PROXY ? location.origin + "/v1" : ($("setBase").value.trim() || DEFAULT_SET.baseURL);
+    settings.system = $("setPrompt").value.trim();
+    settings.autoProbe = $("setAutoProbe").checked;
     store.set(LS.set, settings);
     $("settingsModal").classList.remove("open");
     loadModels();

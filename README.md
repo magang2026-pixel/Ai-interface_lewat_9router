@@ -24,8 +24,12 @@ dan filter model otomatis.
 - Markdown + syntax highlight + tombol salin kode.
 - Stop generate (`AbortController`) dan ulangi pesan.
 - Mode terang/gelap, menghormati `prefers-color-scheme`.
-- **Filter model otomatis**: setiap model diuji mini-request di latar belakang,
-  yang gagal disembunyikan. Hasil di-cache 6 jam. `antigravity` (`ag/*`) dibuang.
+- **System prompt** bisa diubah di Setelan (kosong = bawaan AiXych: menyebut model
+  aktif dan menolak mengaku sebagai Anthropic/Claude/OpenAI).
+- **Filter model otomatis**: opsional. Mati secara default — tidak ada tes
+  berjalan saat daftar dibuka, jadi tidak menunggu. Nyalakan di Setelan atau
+  tekan **uji ulang**. Model gagal disembunyikan (cache 24 jam), model hidup
+  6 jam. `antigravity` (`ag/*`) dibuang.
 - **Filter kapabilitas**: chip `Semua · Gambar · Suara · Gambar+Suara · Thinking · PDF`,
   diambil dari `capabilities` di `/v1/models`.
 
@@ -57,7 +61,7 @@ Keluaran:
 
 ```
 UI     http://localhost:8090
-proxy  /v1 -> http://127.0.0.1:20128  (key disuntik)
+proxy  /v1 → http://127.0.0.1:20128  (key disuntik)
 HTTPS  https://192.168.2.7:8443  (cert self-signed)
 ```
 
@@ -109,55 +113,110 @@ Cek cepat sebelum commit:
 git grep -nE 'sk-[a-zA-Z0-9-]{8,}' || echo "bersih"
 ```
 
-## Input suara
+## Input suara (mic)
 
 Klik ikon mikrofon di kiri kotak pesan → bicara → klik lagi. Teks hasil
-transkripsi disisipkan ke kotak pesan (tidak langsung terkirim).
+transkripsi disisipkan ke kotak pesan (tidak langsung terkirim). Auto-stop 60
+detik; selama merekam baris bantuan menampilkan `Merekam 0:07 · klik mikrofon
+untuk berhenti`.
 
-Alur: `getUserMedia` → Web Audio → downmix mono → resample 16 kHz → WAV PCM16
-(di peramban, tanpa dependensi) → `POST /v1/audio/transcriptions`
-(`model=gemini/gemini-3.5-flash-lite`). Auto-stop 60 detik.
+### Cara kerjanya
 
-**Wajib secure context.** `getUserMedia` hanya ada di `https://` atau
-`localhost`. Jadi `http://<IP-LAN>:8090` **tidak** bisa dipakai mic — bukan bug
-aplikasi.
-
-Cara termudah: aktifkan HTTPS self-signed bawaan.
-
-```bash
-npm run cert          # sekali: buat cert.pem + key.pem (SAN semua IP mesin)
-npm run dev           # sekarang juga mendengarkan https://<ip-lan>:8443
+```
+getUserMedia (mic) → Web Audio (mono) → resample 16 kHz → WAV PCM16
+                                                          (di peramban)
+   → POST /v1/audio/transcriptions   model=gemini/gemini-3.5-flash-lite
+   → { "text": "..." }  →  disisipkan ke kotak pesan
 ```
 
-Buka `https://<ip-lan>:8443` (mis. `https://192.168.2.7:8443`). Browser
-memperingatkan sekali karena cert buatan sendiri:
+Tanpa dependensi, tanpa ffmpeg. STT hanya didukung provider Gemini; provider
+lain (nvidia, groq, openrouter, cloudflare) menolak dengan
+`Provider '...' does not support STT` — bukan salah konfigurasi.
+
+### Kenapa harus HTTPS
+
+`getUserMedia` hanya ada di **secure context**: `https://` atau `localhost`.
+`http://<IP-LAN>:8090` tidak memberi akses mic — aturan browser, bukan bug
+aplikasi. Karena itu server juga mendengarkan HTTPS.
+
+### Menyalakan mic
+
+```bash
+cd claude-chat
+npm run cert     # sekali saja: cert.pem + key.pem (SAN localhost + semua IP mesin)
+npm run dev      # HTTP :8090 dan HTTPS :8443 jalan bersamaan
+```
+
+Keluaran yang benar:
+
+```
+UI     http://localhost:8090
+proxy  /v1 → http://127.0.0.1:20128  (key disuntik)
+HTTPS  https://192.168.2.7:8443  (cert self-signed)
+```
+
+Buka `https://<ip-lan>:8443`. Peringatan cert muncul sekali per browser:
 
 - Chrome/Edge: **Advanced** → **Proceed to \<ip\> (unsafe)**
 - Firefox: **Advanced** → **Accept the Risk and Continue**
 
-Setelah itu mic aktif, di PC maupun HP. HTTP `:8090` tetap jalan untuk chat
-tanpa mic. Port HTTPS bisa diganti: `TLSPORT=9443 npm run dev`.
+Setelah itu klik ikon mikrofon dan izinkan akses.
 
-Catatan: cert berlaku 825 hari dan berisi IP saat dibuat. Kalau IP mesin
-berubah, jalankan `npm run cert` lagi.
+### Cek cepat kalau mic mati
 
-Alternatif (cert valid, tanpa peringatan) — butuh root sekali:
+```bash
+ss -ltn | grep -E ':8090|:8443'                                  # dua-duanya LISTEN
+curl -k -o /dev/null -w "%{http_code}\n" https://<ip-lan>:8443/   # 200
+tail -5 /tmp/chatsrv.log                                          # ada baris HTTPS
+```
+
+Kalau `:8443` tidak ada di `ss`, server hidup tanpa HTTPS (mis. dijalankan
+sebelum `npm run cert`). Ulangi:
+
+```bash
+fuser -k 8090/tcp; fuser -k 8443/tcp
+npm run dev
+```
+
+### Menghentikan / mengganti
+
+| Kebutuhan | Perintah |
+|---|---|
+| Hentikan semua | `fuser -k 8090/tcp; fuser -k 8443/tcp` |
+| Matikan HTTPS saja | `fuser -k 8443/tcp` |
+| Port HTTPS lain | `TLSPORT=9443 npm run dev` |
+| HTTP saja (tanpa mic) | rename `cert.pem` & `key.pem`, lalu `npm run dev` |
+| IP mesin berubah | `npm run cert` lagi |
+
+Cert berlaku 825 hari. `cert.pem`/`key.pem` masuk `.gitignore`.
+
+### Alternatif HTTPS
 
 ```bash
 sudo tailscale serve --bg http://127.0.0.1:8090
 ```
 
-lalu buka `https://<host>.<tailnet>.ts.net`. Hanya jalan di perangkat yang
-login akun tailnet yang sama.
+Buka `https://<host>.<tailnet>.ts.net`. Hanya jalan di perangkat yang login
+akun tailnet yang sama; di luar itu muncul `NXDOMAIN`. Port 443 dipakai
+tailscale, jadi `TLSPORT=443` bentrok sampai `sudo tailscale serve reset`.
 
-STT hanya didukung provider Gemini. Provider lain (nvidia/groq/openrouter/cf)
-menolak dengan `Provider '...' does not support STT` — bukan salah konfigurasi.
+Punya domain + cert valid (Let's Encrypt)? Arahkan A record ke IP LAN mesin ini
+dan ganti `cert.pem`/`key.pem` dengan cert asli — `serve.mjs` tidak perlu diubah.
 
 ## Model
 
-Daftar diambil dari `/v1/models`. Saat pertama dimuat, semua model diuji paralel
-(3 worker, timeout 8 detik, `max_tokens: 1`). Yang gagal tidak ditampilkan; yang
-hidup dipakai. Hasil disimpan di `localStorage` (`pc.ping`) selama 6 jam.
+Daftar diambil dari `/v1/models`. Model `antigravity` (`ag/*`,
+`combo_antigravity_gemini`) dikecualikan.
+
+**Pindai otomatis = mati secara default.** Saat daftar dimuat, tidak ada tes
+yang berjalan — jadi tidak ada tunggu-menunggu. Untuk mengetahui model mana
+yang hidup, klik **uji ulang** di dropdown model, atau nyalakan
+*Setelan → Pindai model otomatis*. Saat menyala, semua model diuji paralel
+(3 worker, timeout 8 detik, `max_tokens: 1`).
+
+Cache hasil di `localStorage` (`pc.ping`): model hidup 6 jam, model gagal
+24 jam. Model gagal **tidak ditampilkan** (jadi tidak diuji ulang terus).
+Klik **gagal** untuk melihatnya beserta kode error.
 
 Di dropdown model:
 
@@ -166,7 +225,25 @@ Di dropdown model:
 - **uji ulang** — tes ulang paksa (mis. setelah kena rate-limit).
 - **gagal** — toggle untuk menampilkan model yang dibuang beserta kode error.
 
-Model `antigravity` (`ag/*`, `combo_antigravity_gemini`) dikecualikan.
+## Setelan
+
+| Field | Guna |
+|---|---|
+| URL dasar | Endpoint 9router. Lewat proxy, otomatis `location.origin + "/v1"`. |
+| Kunci API | Kosongkan bila `serve.mjs` sudah menyuntik kunci. |
+| System prompt | Identitas/aturan model. Kosong = bawaan AiXych. |
+| Pindai model otomatis | Mati = tidak ada tes model tanpa perintah. |
+
+Bawaan system prompt:
+
+```
+Kamu AiXych, antarmuka chat ini. Model yang sedang dipakai: <model>.
+Jangan mengaku sebagai produk Anthropic, Claude, OpenAI, atau Google; bila
+ditanya siapa kamu atau model apa yang menjawab, sebutkan AiXych dan model di atas.
+```
+
+Ini instruksi, bukan jaminan: model tetap bisa mengelak. Sumber kebenaran
+adalah nilai `model` di dropdown dan `usage` dari API.
 
 ## Struktur file
 
@@ -207,6 +284,9 @@ LD_LIBRARY_PATH=/path/ke/libs node uicheck.mjs
 | Model hilang dari daftar | Model sedang mati. Klik **uji ulang**, atau toggle **gagal**. |
 | Gambar ditolak | Pilih model bertanda `· gambar`. |
 | Error `500/403/503` saat chat | Model itu mati di sisi penyedia. Ganti ke model lain. |
+| `ERR_EMPTY_RESPONSE` / reset di `:8443` | Dibuka sebagai `http://`, atau antivirus/proxy membunuh TLS non-443 | Pakai `https://`; kalau tetap, pindah ke 443: `sudo tailscale serve reset` lalu `sudo -E env "PATH=$PATH" TLSPORT=443 node serve.mjs` |
+| `DNS_PROBE_FINISHED_NXDOMAIN` | Nama `*.ts.net` dibuka dari perangkat yang tidak login tailnet | Pakai IP LAN, atau daftarkan domain sendiri |
+| Mic jalan tapi teks kosong | Rekaman < 0,4 detik atau terlalu pelan | Rekam lebih lama / dekatkan mic |
 | Ikon mikrofon tidak bereaksi | Halaman dibuka lewat `http://<IP>` bukan HTTPS/localhost. `getUserMedia` butuh secure context — lihat bagian Input suara. |
 | `Izin mikrofon ditolak` | Aktifkan izin mikrofon untuk situs ini di setelan peramban. |
 | `Gagal transkripsi: Provider ... does not support STT` | `STT_MODEL` di `index.html` bukan model Gemini. Hanya provider Gemini yang mendukung STT. |
