@@ -3,8 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Percakapan</title>
-<meta name="description" content="Antarmuka chat untuk 9router.">
+<title>AiXych</title>
+<meta name="description" content="AiXych — antarmuka chat untuk 9router.">
+<link rel="icon" type="image/png" href="cuking.png">
+<link rel="apple-touch-icon" href="cuking.png">
 <meta name="color-scheme" content="light dark">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -40,7 +42,7 @@ button{font:inherit;color:inherit}
 }
 .side-top{display:flex; flex-direction:column; gap:10px; padding:4px}
 .brand{display:flex; align-items:center; gap:9px; padding:2px 4px 6px}
-.brand svg{color:var(--accent); flex:none}
+.brand img{width:24px; height:24px; border-radius:6px; object-fit:cover; flex:none}
 .brand h1{
   font-family:"Newsreader",Georgia,serif; font-weight:500; font-size:20px; margin:0;
   letter-spacing:-.01em;
@@ -246,6 +248,13 @@ button{font:inherit;color:inherit}
 }
 .mini:hover{color:var(--ink); border-color:var(--border-strong)}
 .mini[aria-pressed="true"]{border-color:var(--accent); color:var(--accent)}
+.chips{display:flex; flex-wrap:wrap; gap:4px; padding:0 6px 8px; border-bottom:1px solid var(--border); margin-bottom:4px}
+.chip{
+  border:1px solid var(--border); background:transparent; border-radius:999px; padding:3px 9px;
+  font-size:11.5px; color:var(--muted); cursor:pointer; flex:none;
+}
+.chip:hover{color:var(--ink); border-color:var(--border-strong)}
+.chip[aria-pressed="true"]{background:color-mix(in srgb,var(--accent) 14%,transparent); border-color:var(--accent); color:var(--accent)}
 
 .modal{position:fixed; inset:0; z-index:70; display:none; align-items:center; justify-content:center; padding:20px; background:rgba(20,20,19,.45)}
 .modal.open{display:flex}
@@ -300,8 +309,8 @@ button{font:inherit;color:inherit}
   <aside class="sidebar" id="sidebar" aria-label="Daftar percakapan">
     <div class="side-top">
       <div class="brand">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/></svg>
-        <h1>Percakapan</h1>
+        <img src="cuking.png" alt="" width="24" height="24">
+        <h1>AiXych</h1>
       </div>
       <button class="new-chat" id="newChat">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
@@ -417,6 +426,18 @@ button{font:inherit;color:inherit}
   let showFail = store.get("pc.showFail", false);
   let probing = false;
   const PING_TTL = 6 * 60 * 60 * 1000;
+  const FILTERS = [
+    { id: "all", label: "Semua", test: () => true },
+    { id: "img", label: "Gambar", test: (m) => m.vision },
+    { id: "audio", label: "Suara", test: (m) => m.audio },
+    { id: "both", label: "Gambar+Suara", test: (m) => m.vision && m.audio },
+    { id: "think", label: "Thinking", test: (m) => m.reasoning },
+    { id: "pdf", label: "PDF", test: (m) => m.pdf },
+  ];
+  const FILTER_KEYWORD = { gambar: "img", suara: "audio", thinking: "think", pdf: "pdf", semua: "all" };
+  let modelFilter = store.get("pc.filter", "all");
+  const activeFilter = () => FILTERS.find((f) => f.id === modelFilter) || FILTERS[0];
+  const passFilter = (m) => activeFilter().test(m);
   let pending = [];           // gambar terlampir
   let controller = null;      // AbortController
   let streaming = false;
@@ -711,6 +732,14 @@ button{font:inherit;color:inherit}
   ];
   const slash = { open: false, mode: "cmd", items: [], index: 0 };
   const shortModel = (id) => { const p = id.split("/"); return p[p.length - 1] || id; };
+  const tagsOf = (m) => {
+    const t = [];
+    if (m.vision) t.push("gambar");
+    if (m.audio) t.push("suara");
+    if (m.pdf) t.push("pdf");
+    if (m.reasoning) t.push("thinking");
+    return t;
+  };
 
   function slashState() {
     const v = input.value;
@@ -729,13 +758,19 @@ button{font:inherit;color:inherit}
       slash.items = SLASH_CMDS.filter((c) => c.name.startsWith(st.q))
         .map((c) => ({ label: "/" + c.name, desc: c.desc, cmd: c.name }));
     } else {
-      slash.items = models.filter((m) => m.id.toLowerCase().includes(st.q) && statusOf(m.id) !== "fail")
-        .map((m) => ({ label: shortModel(m.id), desc: m.id + (m.vision ? " · gambar" : ""), model: m.id }));
+      const kw = FILTER_KEYWORD[st.q];
+      const ftest = kw ? (FILTERS.find((f) => f.id === kw) || FILTERS[0]).test : passFilter;
+      slash.items = models
+        .filter((m) => ftest(m) && (kw ? true : m.id.toLowerCase().includes(st.q)) && statusOf(m.id) !== "fail")
+        .map((m) => {
+          const tags = tagsOf(m);
+          return { label: shortModel(m.id), desc: m.id + (tags.length ? " · " + tags.join(" · ") : ""), model: m.id };
+        });
     }
     if (!slash.items.length) {
       if (st.mode !== "model") return closeSlash();
       slash.items = models.length
-        ? [{ label: "Tak ada model hidup", desc: "Klik untuk uji ulang", cmd: "reprobe" }]
+        ? [{ label: "Tak ada model cocok", desc: "Klik untuk uji ulang", cmd: "reprobe" }]
         : [{ label: "Model belum termuat", desc: "Klik untuk buka Setelan", cmd: "key" }];
     }
     renderSlash();
@@ -823,7 +858,13 @@ button{font:inherit;color:inherit}
       const j = await res.json();
       models = (j.data || [])
         .filter((x) => !/^ag\//i.test(x.id) && !/antigravity/i.test(x.id))
-        .map((x) => ({ id: x.id, vision: !!x.capabilities?.vision }));
+        .map((x) => {
+          const c = x.capabilities || {};
+          return {
+            id: x.id, vision: !!c.vision, audio: !!c.audioInput, pdf: !!c.pdf,
+            reasoning: !!c.reasoning, tools: !!c.tools, search: !!c.search,
+          };
+        });
       const rank = (m) => { const i = PREF_MODELS.indexOf(m.id); return i === -1 ? 99 : i; };
       models.sort((a, b) => rank(a) - rank(b) || (b.vision ? 1 : 0) - (a.vision ? 1 : 0) || a.id.localeCompare(b.id));
     } catch { models = []; }
@@ -916,14 +957,27 @@ button{font:inherit;color:inherit}
       head.append(label, again, tf);
       menu.append(head);
 
+      const chips = document.createElement("div");
+      chips.className = "chips";
+      FILTERS.forEach((f) => {
+        const c = document.createElement("button");
+        c.type = "button"; c.className = "chip"; c.textContent = f.label;
+        c.setAttribute("aria-pressed", String(f.id === modelFilter));
+        c.addEventListener("click", (e) => {
+          e.stopPropagation(); modelFilter = f.id; store.set("pc.filter", modelFilter); openModelMenu();
+        });
+        chips.append(c);
+      });
+      menu.append(chips);
+
       const weight = (m) => ({ ok: 0, unknown: 1, fail: 2 }[statusOf(m.id)]);
-      const list = models.filter((m) => showFail || statusOf(m.id) !== "fail")
+      const list = models.filter((m) => (showFail || statusOf(m.id) !== "fail") && passFilter(m))
         .sort((a, b) => weight(a) - weight(b));
 
       if (!list.length) {
         const p = document.createElement("div");
         p.className = "conv-empty";
-        p.textContent = probing ? "Sedang menguji model…" : "Tak ada model yang hidup. Coba “uji ulang”.";
+        p.textContent = probing ? "Sedang menguji model…" : "Tak ada model cocok. Coba filter lain atau “uji ulang”.";
         menu.append(p);
       }
       list.forEach((m) => {
@@ -933,8 +987,9 @@ button{font:inherit;color:inherit}
         const st = statusOf(m.id);
         b.innerHTML = `<span class="mdot ${st === "ok" ? "ok" : st === "fail" ? "fail" : ""}"></span>` +
           `<span class="mi-text"><strong></strong><small></small></span>`;
+        const tags = tagsOf(m);
         b.querySelector("strong").textContent = shortModel(m.id);
-        b.querySelector("small").textContent = m.id + (m.vision ? " · gambar" : "") +
+        b.querySelector("small").textContent = m.id + (tags.length ? " · " + tags.join(" · ") : "") +
           (st === "fail" && pingMap[m.id]?.code ? " · gagal " + pingMap[m.id].code : "");
         b.addEventListener("click", () => {
           model = m.id; store.set(LS.model, model); $("modelName").textContent = model; closeMenus();

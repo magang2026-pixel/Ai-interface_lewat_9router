@@ -2,7 +2,7 @@
 // jadi tak ada preflight CORS (9router menolak OPTIONS non-loopback dengan 401).
 // Pakai: node serve.mjs   (PORT, API_KEY bisa di-override lewat env)
 import http from "node:http";
-import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { extname, join, resolve } from "node:path";
 
@@ -33,11 +33,13 @@ function serveStatic(res, pathname) {
     res.writeHead(404, { "content-type": "text/plain" });
     return res.end("404");
   }
-  res.writeHead(200, {
-    "content-type": MIME[extname(file)] || "application/octet-stream",
-    "cache-control": "no-cache",
-  });
-  createReadStream(file).pipe(res);
+  const buf = readFileSync(file);
+  // sniff: sebagian file (mis. cuking.png) sebenarnya JPEG
+  let type = MIME[extname(file)] || "application/octet-stream";
+  if (buf[0] === 0xff && buf[1] === 0xd8) type = "image/jpeg";
+  else if (buf[0] === 0x89 && buf[1] === 0x50) type = "image/png";
+  res.writeHead(200, { "content-type": type, "cache-control": "no-cache" });
+  res.end(buf);
 }
 
 function proxy(req, res, u) {

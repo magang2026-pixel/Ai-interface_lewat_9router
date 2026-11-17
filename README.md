@@ -1,4 +1,4 @@
-# Claude Chat — UI chat untuk 9router
+# AiXych — UI chat untuk 9router
 
 Antarmuka chat ringan (satu file `index.html`, tanpa build) untuk endpoint
 OpenAI-compatible 9router. Streaming, kirim gambar, riwayat, slash command,
@@ -11,6 +11,7 @@ dan filter model otomatis.
 - Riwayat percakapan di `localStorage`, sidebar dengan hapus/rename judul.
 - Slash command di kotak chat:
   - `/model` — pilih model (daftar dari `/v1/models`)
+  - `/model gambar` · `/model suara` · `/model thinking` · `/model pdf` — saring berdasarkan kemampuan
   - `/new` — percakapan baru
   - `/clear` — kosongkan percakapan aktif
   - `/theme` — terang/gelap
@@ -21,6 +22,8 @@ dan filter model otomatis.
 - Mode terang/gelap, menghormati `prefers-color-scheme`.
 - **Filter model otomatis**: setiap model diuji mini-request di latar belakang,
   yang gagal disembunyikan. Hasil di-cache 6 jam. `antigravity` (`ag/*`) dibuang.
+- **Filter kapabilitas**: chip `Semua · Gambar · Suara · Gambar+Suara · Thinking · PDF`,
+  diambil dari `capabilities` di `/v1/models`.
 
 ## Arsitektur singkat
 
@@ -107,6 +110,8 @@ hidup dipakai. Hasil disimpan di `localStorage` (`pc.ping`) selama 6 jam.
 
 Di dropdown model:
 
+- **Chip kemampuan** — saring `Gambar`, `Suara`, `Gambar+Suara`, `Thinking`, `PDF`.
+  Diambil dari `capabilities` (`vision`, `audioInput`, `pdf`, `reasoning`).
 - **uji ulang** — tes ulang paksa (mis. setelah kena rate-limit).
 - **gagal** — toggle untuk menampilkan model yang dibuang beserta kode error.
 
@@ -116,6 +121,7 @@ Model `antigravity` (`ag/*`, `combo_antigravity_gemini`) dikecualikan.
 
 ```
 index.html    UI lengkap (CSS + JS inline)
+cuking.png    ikon aplikasi / favicon
 serve.mjs     server statis + proxy /v1 + injeksi key
 package.json  script npm
 selfcheck.mjs uji API 9router (streaming + gambar)
