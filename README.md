@@ -54,7 +54,7 @@ proxy  /v1 -> http://127.0.0.1:20128  (key disuntik)
 ```
 
 Buka `http://localhost:8090`. Dari perangkat lain di LAN/tailscale, gunakan IP
-mesin ini, mis. `http://192.168.2.7:8090`.
+mesin ini, mis. `http://192.168.1.10:8090`.
 
 Ganti port:
 
