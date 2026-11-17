@@ -1,0 +1,11 @@
+{
+  "name": "claude-chat",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Chat UI untuk 9router (streaming + gambar)",
+  "scripts": {
+    "dev": "node serve.mjs",
+    "start": "node serve.mjs",
+    "check": "node uicheck.mjs"
+  }
+}
