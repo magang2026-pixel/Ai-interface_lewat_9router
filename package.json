@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node serve.mjs",
     "start": "node serve.mjs",
+    "cert": "node cert.mjs",
     "check": "node uicheck.mjs"
   }
 }

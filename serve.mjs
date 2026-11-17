@@ -2,8 +2,9 @@
 // jadi tak ada preflight CORS (9router menolak OPTIONS non-loopback dengan 401).
 // Pakai: node serve.mjs   (PORT, API_KEY bisa di-override lewat env)
 import http from "node:http";
+import https from "node:https";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, networkInterfaces } from "node:os";
 import { extname, join, resolve } from "node:path";
 
 const ROOT = resolve(".");
@@ -59,11 +60,13 @@ function proxy(req, res, u) {
   req.pipe(pr);
 }
 
-const server = http.createServer((req, res) => {
+function handle(req, res) {
   const u = new URL(req.url, "http://x");
   if (u.pathname === "/v1" || u.pathname.startsWith("/v1/")) return proxy(req, res, u);
   serveStatic(res, u.pathname);
-});
+}
+
+const server = http.createServer(handle);
 server.on("error", (e) => {
   if (e.code === "EADDRINUSE") {
     console.error(`Port ${PORT} sedang dipakai. Coba: PORT=${PORT + 1} npm run dev`);
@@ -75,3 +78,22 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`UI     http://localhost:${PORT}`);
   console.log(`proxy  /v1 -> ${UP}  ${KEY ? "(key disuntik)" : "(TANPA key!)"}`);
 });
+
+// HTTPS opsional: mic (getUserMedia) butuh secure context selain localhost.
+// Bikin cert sekali dengan `npm run cert`.
+const TLSPORT = Number(process.env.TLSPORT || 8443);
+const certFile = join(ROOT, "cert.pem"), keyFile = join(ROOT, "key.pem");
+if (existsSync(certFile) && existsSync(keyFile)) {
+  https.createServer({ cert: readFileSync(certFile), key: readFileSync(keyFile) }, handle)
+    .on("error", (e) => {
+      if (e.code === "EADDRINUSE") return console.error(`Port ${TLSPORT} dipakai, HTTPS mati. Coba TLSPORT=${TLSPORT + 1}`);
+      console.error("HTTPS:", e.message);
+    })
+    .listen(TLSPORT, "0.0.0.0", () => {
+      const ips = Object.values(networkInterfaces()).flat()
+        .filter((a) => a && a.family === "IPv4" && !a.internal).map((a) => a.address);
+      console.log(`HTTPS  https://${ips[0] || "localhost"}:${TLSPORT}  (cert self-signed)`);
+    });
+} else {
+  console.log("HTTPS  mati — jalankan `npm run cert` sekali untuk mengaktifkan mic dari perangkat lain");
+}

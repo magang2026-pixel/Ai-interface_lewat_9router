@@ -58,7 +58,10 @@ Keluaran:
 ```
 UI     http://localhost:8090
 proxy  /v1 -> http://127.0.0.1:20128  (key disuntik)
+HTTPS  https://192.168.2.7:8443  (cert self-signed)
 ```
+
+Baris `HTTPS` hanya muncul setelah `npm run cert`.
 
 Buka `http://localhost:8090`. Dari perangkat lain di LAN/tailscale, gunakan IP
 mesin ini, mis. `http://192.168.1.10:8090`.
@@ -116,21 +119,36 @@ Alur: `getUserMedia` → Web Audio → downmix mono → resample 16 kHz → WAV 
 (`model=gemini/gemini-3.5-flash-lite`). Auto-stop 60 detik.
 
 **Wajib secure context.** `getUserMedia` hanya ada di `https://` atau
-`localhost`. Jadi:
+`localhost`. Jadi `http://<IP-LAN>:8090` **tidak** bisa dipakai mic — bukan bug
+aplikasi.
 
-- `http://127.0.0.1:8090` di mesin ini → jalan.
-- `http://<IP-LAN>:8090` dari HP → **tidak jalan** (`navigator.mediaDevices`
-  tidak ada), bukan bug aplikasi.
+Cara termudah: aktifkan HTTPS self-signed bawaan.
 
-Buka lewat HTTPS dengan tailscale:
+```bash
+npm run cert          # sekali: buat cert.pem + key.pem (SAN semua IP mesin)
+npm run dev           # sekarang juga mendengarkan https://<ip-lan>:8443
+```
+
+Buka `https://<ip-lan>:8443` (mis. `https://192.168.2.7:8443`). Browser
+memperingatkan sekali karena cert buatan sendiri:
+
+- Chrome/Edge: **Advanced** → **Proceed to \<ip\> (unsafe)**
+- Firefox: **Advanced** → **Accept the Risk and Continue**
+
+Setelah itu mic aktif, di PC maupun HP. HTTP `:8090` tetap jalan untuk chat
+tanpa mic. Port HTTPS bisa diganti: `TLSPORT=9443 npm run dev`.
+
+Catatan: cert berlaku 825 hari dan berisi IP saat dibuat. Kalau IP mesin
+berubah, jalankan `npm run cert` lagi.
+
+Alternatif (cert valid, tanpa peringatan) — butuh root sekali:
 
 ```bash
 sudo tailscale serve --bg http://127.0.0.1:8090
-tailscale serve status     # lihat URL https://<host>.<tailnet>.ts.net
 ```
 
-Lalu buka URL `https://...ts.net` di HP. (Kalau tidak mau pakai root permanen:
-`sudo tailscale set --operator=$USER` sekali, setelah itu cukup `tailscale serve`.)
+lalu buka `https://<host>.<tailnet>.ts.net`. Hanya jalan di perangkat yang
+login akun tailnet yang sama.
 
 STT hanya didukung provider Gemini. Provider lain (nvidia/groq/openrouter/cf)
 menolak dengan `Provider '...' does not support STT` — bukan salah konfigurasi.
@@ -156,6 +174,7 @@ Model `antigravity` (`ag/*`, `combo_antigravity_gemini`) dikecualikan.
 index.html    UI lengkap (CSS + JS inline)
 cuking.png    ikon aplikasi / favicon
 serve.mjs     server statis + proxy /v1 + injeksi key
+cert.mjs      bikin cert self-signed untuk HTTPS (npm run cert)
 package.json  script npm
 selfcheck.mjs uji API 9router (streaming + gambar)
 uicheck.mjs   smoke test UI via Chrome headless (CDP)
